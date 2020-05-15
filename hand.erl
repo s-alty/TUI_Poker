@@ -8,14 +8,17 @@ start(Table) -> spawn(?MODULE, hand_loop, [Table, 0]).
 
 hand_loop(Table, HandNumber) ->
     Players = table:get_players(Table),
-    % advance the markers
-    % collect the blinds
+    [#player{ref=BBPlayer}] = lists:filter(fun(P) -> P#player.is_bb end, Players),
+    chips:decrement(BBPlayer, BB), %% todo if they can't cover we need to kick them and restart the hand
+    [#player{ref=SBPlayer}] = lists:filter(fun(P) -> P#player.is_sb end, Players),
+    chips:decrement(SBPlayer, SB),
+
     Deck = cards:make_deck(),
     {Hands, Deck1} = deal_hands(Players),
-    % inform players of their hands
     lists:foreach(fun({Ref, Cards}) -> table ! {send_update, Ref, {hole_cards, Cards}} end, Hands),
 
-    {Players1, Pot} = handle_betting(Table, Players, [], BB, BB+SB),
+    OrderedPlayers = utils:rotate_about(fun(P) -> P#player.is_bb end, Players)
+    {Players1, Pot} = handle_betting(Table, OrderedPlayers, [], BB, BB+SB),
     case Players1 of
         [Winner] ->
             #player{ref=Ref} = Winner,
@@ -25,10 +28,9 @@ hand_loop(Table, HandNumber) ->
             _ -> 0
     end,
 
-
     [Burn1,Flop1,Flop2,Flop3|Deck2] = Deck1,
     table ! {broadcast, {flop, [Flop1, Flop2, Flop3]}},
-    {Players2, Pot2} = handle_betting(Table, Players1, [], 0, Pot1),
+    {Players2, Pot2} = handle_betting(Table, postflop_order(Players, Players1), [], 0, Pot1),
     case Players2 of
         [Winner] ->
             #player{ref=Ref} = Winner,
@@ -41,7 +43,7 @@ hand_loop(Table, HandNumber) ->
 
     [Burn2,Turn|Deck3] = Deck2,
     table ! {broadcast, {turn, Turn}}
-    {Players3, Pot3} = handle_betting(Table, Players2, [], 0, Pot2),
+    {Players3, Pot3} = handle_betting(Table, postflop_order(Players, Players2), [], 0, Pot2),
     case Players3 of
         [Winner] ->
             #player{ref=Ref} = Winner,
@@ -54,7 +56,7 @@ hand_loop(Table, HandNumber) ->
 
     [Burn3,River|_] = Deck3,
     table ! {broadcast, {river, River}},
-    {Players4, Pot4} = handle_betting(Table, Players3, [], 0, Pot3),
+    {Players4, Pot4} = handle_betting(Table, postflop_order(Players, Players3), [], 0, Pot3),
     case Players4 of
         [Winner] ->
             #player{ref=Ref} = Winner,
@@ -81,8 +83,8 @@ handle_betting(Table, [Player|PlayersLeftToAct], PlayersInvolved, BetSize, PotSi
         {Ref, call} ->
             AmountToContribute = BetSize - Current,
             case chips:decrement(Ref, AmountToContribute) of
-                error -> %% TODO how to handle this?;
-                    _ ->
+                error -> %% TODO how to handle this?
+                    _ -> ok
             end,
             UpdatedPlayer = Player#player{current_bet=Betsize},
             PlayersLeftToAct1 = PlayersLeftToAct,
@@ -94,7 +96,7 @@ handle_betting(Table, [Player|PlayersLeftToAct], PlayersInvolved, BetSize, PotSi
             AmountToContribute = Amount - Current,
             case chips:decrement(Ref, AmountToContribute) of
                 error -> %% TODO how to handle this?;
-                    _ ->
+                    _ -> ok
             end,
             UpdatedPlayer = Player#player{current_bet=Amount},
             PlayersLeftToAct1 = PlayersLeftToAct ++ PlayersInvolved,
@@ -128,6 +130,10 @@ deal_hands(Deck, Players) ->
 
 
 
+postflop_order(AllPlayers, PlayersStillInHand) ->
+    RefsStillInHand = lists:map(fun(P) -> P#player.ref end, PlayersStillInHand),
+    OrderedPlayers = utils:rotate_about(fun(P) -> P#player.is_button end, AllPlayers),
+    lists:filter(fun(#player{ref=R}) -> lists:member(R, RefsStillInHand) end, OrderedPlayers).
 
 
 
