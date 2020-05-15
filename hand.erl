@@ -1,7 +1,8 @@
 -module(hand).
 
 -include("records.hrl").
-
+-define(SB, 100).
+-define(BB, 200).
 
 %% we need to keep track of
 %% 1. Players in hand
@@ -28,44 +29,49 @@
 %% 4. add preceeding players in hand to end of players left to act
 %% 5. recurse with players left to act
 
-
-%% TODO: we should send update messges back to the table on each state change
-
-init_hand(Players) ->
-%% BetSize starts at BB
-%% PotSize start at SB + BB
-%% playersInvolved starts empty
-
-
-%% postflop playersInvolved starts empty and gets new players on a call or raise
-
-handle_betting([], PlayersInvolved, BetSize, PotSize) -> {PlayersInHand, BetSize, PotSize};
-handle_betting([Player|PlayersLeftToAct], PlayersInvolved, BetSize, PotSize) ->
-    #player{ref=Ref, current_bet=Current} = Player
+handle_betting(Table, [], PlayersInvolved, _, PotSize) -> {PlayersInHand, PotSize};
+handle_betting(Table, [Player|PlayersLeftToAct], PlayersInvolved, BetSize, PotSize) ->
+    #player{ref=Ref, current_bet=Current} = Player,
+    Table ! {send_update, Ref, action},
     receive
         {Ref, fold} ->
-            handle_betting(PlayersLeftToAct, PlayersInvolved, BetSize, PotSize);
+            PlayersLeftToAct1 = PlayersLeftToAct,
+            PlayersInvolved1 = PlayersInvolved,
+            BetSize1 = BetSize,
+            PotSize1 = PotSize;
         {Ref, call} ->
             AmountToContribute = BetSize - Current,
             case chips:decrement(Ref, AmountToContribute) of
                 error -> %% TODO how to handle this?;
-                _ ->
+                    _ ->
             end,
             UpdatedPlayer = Player#player{current_bet=Betsize},
-            handle_betting(PlayersLeftToAct, PlayersInvolved ++ UpdatedPlayer, Betsize, PotSize + AmountContributed);
-
+            PlayersLeftToAct1 = PlayersLeftToAct,
+            PlayerdInvolved1 = PlayersInvolved ++ UpdatedPlayer,
+            BetSize1 = BetSize,
+            PotSize1 = PotSize + AmountContributed;
         {Ref, raise, Amount} ->
             %% TODO: check that Amount is 2x bigger than current BetSize
             AmountToContribute = Amount - Current,
             case chips:decrement(Ref, AmountToContribute) of
                 error -> %% TODO how to handle this?;
-                _ ->
+                    _ ->
             end,
             UpdatedPlayer = Player#player{current_bet=Amount},
-            handle_betting(PlayersLeftToAct ++ PlayersInvolved, [UpdatedPlayer], Amount, PotSize + AmountContributed);
-        after 60000 ->
-                handle_betting(PlayersLeftToAct, PlayersInvolved, BetSize, PotSize) %% same as a fold
-        end.
+            PlayersLeftToAct1 = PlayersLeftToAct ++ PlayersInvolved,
+            PlayersInvolved1 = [UpdatedPlayer],
+            BetSize1 = Amount,
+            PotSize1 = PotSize + AmountContributed;
+    after 60000 ->
+            PlayersLeftToAct1 = PlayersLeftToAct,
+            PlayersInvolved1 = PlayersInvolved,
+            BetSize1 = BetSize,
+            PotSize1 = PotSize;
+    end,
+    %% broadcast outcome and recurse
+    Table ! {broadcast, {update, Betsize1, PotSize1, PlayersInvolved1, PlayersLeftToAct1}},
+    handle_betting(PlayersLeftToAct1, PlayersInvolved1, BetSize1, PotSize1).
+
 
 handle_showdown(CommunityCards, Potsize, [], PlayersLeft) ->
     Hands = cards:best_hands(PlayersLeft).
@@ -91,22 +97,22 @@ hand_loop(Table, HandNumber) ->
     % inform players of their hands
     lists:foreach(fun({Ref, Cards}) -> table ! {send_update, Ref, {hole_cards, Cards}} end, Hands),
 
-    Players1 = handle_betting(Players),
+    {Players1, Pot} = handle_betting(Table, Players, [], BB, BB+SB),
     % case players1 length1 -> pay remaining player, recurse
+
     [Burn1,Flop1,Flop2,Flop3|Deck2] = Deck1,
     table ! {broadcast, {flop, [Flop1, Flop2, Flop3]}},
-
-    Players2 = handle_betting(Players1),
+    {Players2, Pot2} = handle_betting(Table, Players1, [], 0, Pot1),
     % case players2 length1 -> pay remaining player, recurse
 
     [Burn2,Turn|Deck3] = Deck2,
     table ! {broadcast, {turn, Turn}}
-    Players3 = handle_betting(Players2),
+    {Players3, Pot3} = handle_betting(Table, Players2, [], 0, Pot2),
     % case players3 length1 -> pay remaining player, recurse
 
     [Burn3,River|_] = Deck3,
-    table ! {broadcast, {river River}},
-    Players4 = handle_betting(Players3),
+    table ! {broadcast, {river, River}},
+    {Players4, Pot4} = handle_betting(Table, Players3, [], 0, Pot3),
     % case players4 length1 -> pay remaining player, recurse
 
     % handle_showdown

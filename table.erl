@@ -27,11 +27,11 @@ loop(Players) ->
             loop(Players);
         {send_update, For, Message} ->
             case lists:filter(fun({_, #player{ref=R}}) -> R =:= For end, Players) of
-                [{Pid, _}|[]] -> Pid ! Message;
+                [{Pid, _}] -> Pid ! Message;
                  _ -> false %% player wasn't there
             end,
             loop(Players);
         {broadcast, Message} ->
-            lists:map(fun({Pid, _}) -> Pid ! Message end, Players),
+            lists:foreach(fun({Pid, _}) -> Pid ! Message end, Players),
             loop(Players)
     end.
