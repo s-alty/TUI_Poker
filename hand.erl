@@ -4,30 +4,69 @@
 -define(SB, 100).
 -define(BB, 200).
 
-%% we need to keep track of
-%% 1. Players in hand
-%% 2. Players left to act
-%% 3. current bet
-%% 4. Current pot size
+start(Table) -> spawn(?MODULE, hand_loop, [Table, 0]).
 
-%% on a fold ->
-%% 1. remove player from players in hand
-%% 2. recurse with players left to act
+hand_loop(Table, HandNumber) ->
+    Players = table:get_players(Table),
+    % advance the markers
+    % collect the blinds
+    Deck = cards:make_deck(),
+    {Hands, Deck1} = deal_hands(Players),
+    % inform players of their hands
+    lists:foreach(fun({Ref, Cards}) -> table ! {send_update, Ref, {hole_cards, Cards}} end, Hands),
 
-%% on a call ->
-%% 0. check for legal amount based on chip stack
-%% 1. keep player in hand
-%% 2. keep current bet the same
-%% 3. increment pot
-%% 4. recurse with players left to act
+    {Players1, Pot} = handle_betting(Table, Players, [], BB, BB+SB),
+    case Players1 of
+        [Winner] ->
+            #player{ref=Ref} = Winner,
+            Table ! {boadcast, {winner, Winner}},
+            chips:increment(Ref, Pot),
+            hand_loop(Table, HandNumber + 1);
+            _ -> 0
+    end,
 
-%% on a raise ->
-%% 0. check for legal amount based on chip stack
-%% 1. keep player in hand
-%% 2. increment current bet
-%% 3. increment pot
-%% 4. add preceeding players in hand to end of players left to act
-%% 5. recurse with players left to act
+
+    [Burn1,Flop1,Flop2,Flop3|Deck2] = Deck1,
+    table ! {broadcast, {flop, [Flop1, Flop2, Flop3]}},
+    {Players2, Pot2} = handle_betting(Table, Players1, [], 0, Pot1),
+    case Players2 of
+        [Winner] ->
+            #player{ref=Ref} = Winner,
+            Table ! {boadcast, {winner, Winner}},
+            chips:increment(Ref, Pot2),
+            hand_loop(Table, HandNumber + 1);
+            _ -> 0
+    end,
+
+
+    [Burn2,Turn|Deck3] = Deck2,
+    table ! {broadcast, {turn, Turn}}
+    {Players3, Pot3} = handle_betting(Table, Players2, [], 0, Pot2),
+    case Players3 of
+        [Winner] ->
+            #player{ref=Ref} = Winner,
+            Table ! {boadcast, {winner, Winner}},
+            chips:increment(Ref, Pot3),
+            hand_loop(Table, HandNumber + 1);
+            _ -> 0
+    end,
+
+
+    [Burn3,River|_] = Deck3,
+    table ! {broadcast, {river, River}},
+    {Players4, Pot4} = handle_betting(Table, Players3, [], 0, Pot3),
+    case Players4 of
+        [Winner] ->
+            #player{ref=Ref} = Winner,
+            Table ! {boadcast, {winner, Winner}},
+            chips:increment(Ref, Pot4),
+            hand_loop(Table, HandNumber + 1);
+            _ -> 0
+    end,
+
+    % handle_showdown
+    % recurse
+    loop(Table, HandNumber + 1).
 
 handle_betting(Table, [], PlayersInvolved, _, PotSize) -> {PlayersInHand, PotSize};
 handle_betting(Table, [Player|PlayersLeftToAct], PlayersInvolved, BetSize, PotSize) ->
@@ -86,38 +125,6 @@ deal_hands(Deck, Players) ->
                            [First,Second|Deck1] = Deck,
                            {{R, [First, Second]}, Deck1} end,
                    Deck, Players).
-
-
-hand_loop(Table, HandNumber) ->
-    Players = table:get_players(Table),
-    % advance the markers
-    % collect the blinds
-    Deck = cards:make_deck(),
-    {Hands, Deck1} = deal_hands(Players),
-    % inform players of their hands
-    lists:foreach(fun({Ref, Cards}) -> table ! {send_update, Ref, {hole_cards, Cards}} end, Hands),
-
-    {Players1, Pot} = handle_betting(Table, Players, [], BB, BB+SB),
-    % case players1 length1 -> pay remaining player, recurse
-
-    [Burn1,Flop1,Flop2,Flop3|Deck2] = Deck1,
-    table ! {broadcast, {flop, [Flop1, Flop2, Flop3]}},
-    {Players2, Pot2} = handle_betting(Table, Players1, [], 0, Pot1),
-    % case players2 length1 -> pay remaining player, recurse
-
-    [Burn2,Turn|Deck3] = Deck2,
-    table ! {broadcast, {turn, Turn}}
-    {Players3, Pot3} = handle_betting(Table, Players2, [], 0, Pot2),
-    % case players3 length1 -> pay remaining player, recurse
-
-    [Burn3,River|_] = Deck3,
-    table ! {broadcast, {river, River}},
-    {Players4, Pot4} = handle_betting(Table, Players3, [], 0, Pot3),
-    % case players4 length1 -> pay remaining player, recurse
-
-    % handle_showdown
-    % recurse
-    loop(Table, HandNumber + 1).
 
 
 

@@ -3,7 +3,7 @@
 -include("records.hrl").
 % We should use refs to indetify each table and each player
 
-start() -> spawn(?MODULE, loop, [[], 0]).
+start() -> spawn(?MODULE, loop, [[]]).
 
 get_players(Table) ->
     Table ! {self(), list_players},
